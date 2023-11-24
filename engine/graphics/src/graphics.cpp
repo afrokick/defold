@@ -189,6 +189,7 @@ namespace dmGraphics
             GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_FORMAT_RG16F);
             GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_FORMAT_R32F);
             GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_FORMAT_RG32F);
+            GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_FORMAT_RGBA32UI);
             default:break;
         }
         return "<unknown dmGraphics::TextureFormat>";
@@ -371,6 +372,27 @@ namespace dmGraphics
         return 0;
     }
 
+    uint32_t GetShaderTypeSize(ShaderDesc::ShaderDataType type)
+    {
+        switch(type)
+        {
+            case ShaderDesc::SHADER_TYPE_INT:     return 4;
+            case ShaderDesc::SHADER_TYPE_UINT:    return 4;
+            case ShaderDesc::SHADER_TYPE_FLOAT:   return 4;
+            case ShaderDesc::SHADER_TYPE_VEC2:    return 8;
+            case ShaderDesc::SHADER_TYPE_VEC3:    return 12;
+            case ShaderDesc::SHADER_TYPE_VEC4:    return 16;
+            case ShaderDesc::SHADER_TYPE_MAT2:    return 16;
+            case ShaderDesc::SHADER_TYPE_MAT3:    return 36;
+            case ShaderDesc::SHADER_TYPE_MAT4:    return 64;
+            case ShaderDesc::SHADER_TYPE_UVEC2:   return 16;
+            case ShaderDesc::SHADER_TYPE_UVEC3:   return 36;
+            case ShaderDesc::SHADER_TYPE_UVEC4:   return 64;
+            default: break;
+        }
+        return 0;
+    }
+
     void GetAttributeValues(const dmGraphics::VertexAttribute& attribute, const uint8_t** data_ptr, uint32_t* data_size)
     {
         *data_ptr  = attribute.m_Values.m_BinaryValues.m_Data;
@@ -502,6 +524,9 @@ namespace dmGraphics
         case TEXTURE_FORMAT_RG16F:              return 32;
         case TEXTURE_FORMAT_R32F:               return 32;
         case TEXTURE_FORMAT_RG32F:              return 64;
+        case TEXTURE_FORMAT_RGBA32UI:           return 128;
+        case TEXTURE_FORMAT_BGRA8U:             return 32;
+        case TEXTURE_FORMAT_R32UI:              return 32;
         default:
             assert(false && "Unknown texture format");
             return TEXTURE_FORMAT_COUNT;
@@ -541,11 +566,15 @@ namespace dmGraphics
             case ShaderDesc::SHADER_TYPE_INT:             return TYPE_INT;
             case ShaderDesc::SHADER_TYPE_UINT:            return TYPE_UNSIGNED_INT;
             case ShaderDesc::SHADER_TYPE_FLOAT:           return TYPE_FLOAT;
+            case ShaderDesc::SHADER_TYPE_VEC2:            return TYPE_FLOAT_VEC2;
+            case ShaderDesc::SHADER_TYPE_VEC3:            return TYPE_FLOAT_VEC3;
             case ShaderDesc::SHADER_TYPE_VEC4:            return TYPE_FLOAT_VEC4;
+            case ShaderDesc::SHADER_TYPE_MAT2:            return TYPE_FLOAT_MAT2;
+            case ShaderDesc::SHADER_TYPE_MAT3:            return TYPE_FLOAT_MAT3;
             case ShaderDesc::SHADER_TYPE_MAT4:            return TYPE_FLOAT_MAT4;
             case ShaderDesc::SHADER_TYPE_SAMPLER2D:       return TYPE_SAMPLER_2D;
-            case ShaderDesc::SHADER_TYPE_SAMPLER2D_ARRAY: return TYPE_SAMPLER_2D_ARRAY;
             case ShaderDesc::SHADER_TYPE_SAMPLER_CUBE:    return TYPE_SAMPLER_CUBE;
+            case ShaderDesc::SHADER_TYPE_SAMPLER2D_ARRAY: return TYPE_SAMPLER_2D_ARRAY;
             default: break;
         }
 
@@ -586,6 +615,7 @@ namespace dmGraphics
         switch(format)
         {
             case dmGraphics::TEXTURE_FORMAT_RGBA:
+            case dmGraphics::TEXTURE_FORMAT_RGBA32UI:
             case dmGraphics::TEXTURE_FORMAT_RGBA_BC7:
             case dmGraphics::TEXTURE_FORMAT_RGBA_BC3:
             case dmGraphics::TEXTURE_FORMAT_RGBA_ASTC_4x4:
@@ -765,6 +795,39 @@ namespace dmGraphics
             rgba+=4;
             rgb+=3;
         }
+    }
+
+    // TODO, comment from the PR (#4544):
+    //   "These frequent lookups could be improved by sorting on the key beforehand,
+    //   and during lookup, do a lower_bound, to find the item (or not).
+    //   E.g see: engine/render/src/render/material.cpp#L446"
+    bool GetUniformIndices(const dmArray<ShaderResourceBinding>& uniforms, dmhash_t name_hash, uint64_t* index_out, uint64_t* index_member_out)
+    {
+        assert(uniforms.Size() < UNIFORM_LOCATION_MAX);
+        for (uint32_t i = 0; i < uniforms.Size(); ++i)
+        {
+            if (uniforms[i].m_NameHash == name_hash)
+            {
+                *index_out = i;
+                *index_member_out = 0;
+                return true;
+            }
+            else
+            {
+                assert(uniforms[i].m_BlockMembers.Size() < UNIFORM_LOCATION_MAX);
+                for (uint32_t j = 0; j < uniforms[i].m_BlockMembers.Size(); ++j)
+                {
+                    if (uniforms[i].m_BlockMembers[j].m_NameHash == name_hash)
+                    {
+                        *index_out = i;
+                        *index_member_out = j;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     void DeleteContext(HContext context)
@@ -957,6 +1020,10 @@ namespace dmGraphics
     {
         return g_functions.m_GetVertexDeclarationStride(vertex_declaration);
     }
+    uint32_t GetVertexStreamOffset(HVertexDeclaration vertex_declaration, uint64_t name_hash)
+    {
+        return g_functions.m_GetVertexStreamOffset(vertex_declaration, name_hash);
+    }
     void DrawElements(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count, Type type, HIndexBuffer index_buffer)
     {
         g_functions.m_DrawElements(context, prim_type, first, count, type, index_buffer);
@@ -997,6 +1064,10 @@ namespace dmGraphics
     {
         g_functions.m_DeleteFragmentProgram(prog);
     }
+    ShaderDesc::Language GetProgramLanguage(HProgram program)
+    {
+        return g_functions.m_GetProgramLanguage(program);
+    }
     ShaderDesc::Language GetShaderProgramLanguage(HContext context)
     {
         return g_functions.m_GetShaderProgramLanguage(context);
@@ -1029,19 +1100,19 @@ namespace dmGraphics
     {
         return g_functions.m_GetUniformCount(prog);
     }
-    int32_t  GetUniformLocation(HProgram prog, const char* name)
+    HUniformLocation GetUniformLocation(HProgram prog, const char* name)
     {
         return g_functions.m_GetUniformLocation(prog, name);
     }
-    void SetConstantV4(HContext context, const dmVMath::Vector4* data, int count, int base_register)
+    void SetConstantV4(HContext context, const dmVMath::Vector4* data, int count, HUniformLocation base_location)
     {
-        g_functions.m_SetConstantV4(context, data, count, base_register);
+        g_functions.m_SetConstantV4(context, data, count, base_location);
     }
-    void SetConstantM4(HContext context, const dmVMath::Vector4* data, int count, int base_register)
+    void SetConstantM4(HContext context, const dmVMath::Vector4* data, int count, HUniformLocation base_location)
     {
-        g_functions.m_SetConstantM4(context, data, count, base_register);
+        g_functions.m_SetConstantM4(context, data, count, base_location);
     }
-    void SetSampler(HContext context, int32_t location, int32_t unit)
+    void SetSampler(HContext context, HUniformLocation location, int32_t unit)
     {
         g_functions.m_SetSampler(context, location, unit);
     }
@@ -1246,6 +1317,36 @@ namespace dmGraphics
         assert(asset_handle <= MAX_ASSET_HANDLE_VALUE);
         return g_functions.m_IsAssetHandleValid(context, asset_handle);
     }
+    HComputeProgram NewComputeProgram(HContext context, ShaderDesc::Shader* ddf)
+    {
+        return g_functions.m_NewComputeProgram(context, ddf);
+    }
+    HProgram NewProgram(HContext context, HComputeProgram compute_program)
+    {
+        return g_functions.m_NewProgramFromCompute(context, compute_program);
+    }
+    void DeleteComputeProgram(HComputeProgram prog)
+    {
+        return g_functions.m_DeleteComputeProgram(prog);
+    }
+#ifdef DM_EXPERIMENTAL_GRAPHICS_FEATURES
+    void* MapVertexBuffer(HContext context, HVertexBuffer buffer, BufferAccess access)
+    {
+        return g_functions.m_MapVertexBuffer(context, buffer, access);
+    }
+    bool UnmapVertexBuffer(HContext context, HVertexBuffer buffer)
+    {
+        return g_functions.m_UnmapVertexBuffer(context, buffer);
+    }
+    void* MapIndexBuffer(HContext context, HIndexBuffer buffer, BufferAccess access)
+    {
+        return g_functions.m_MapIndexBuffer(context, buffer, access);
+    }
+    bool UnmapIndexBuffer(HContext context, HIndexBuffer buffer)
+    {
+        return g_functions.m_UnmapIndexBuffer(context, buffer);
+    }
+#endif
 
 #if defined(DM_PLATFORM_IOS)
     void AppBootstrap(int argc, char** argv, void* init_ctx, EngineInit init_fn, EngineExit exit_fn, EngineCreate create_fn, EngineDestroy destroy_fn, EngineUpdate update_fn, EngineGetResult result_fn)

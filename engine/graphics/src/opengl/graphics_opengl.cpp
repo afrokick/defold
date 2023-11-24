@@ -411,7 +411,7 @@ static void LogFrameBufferError(GLenum status)
         m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_RGBA_16BPP;
         m_IndexBufferFormatSupport |= 1 << INDEXBUFFER_FORMAT_16;
 
-        DM_STATIC_ASSERT(sizeof(m_TextureFormatSupport)*4 >= TEXTURE_FORMAT_COUNT, Invalid_Struct_Size );
+        DM_STATIC_ASSERT(sizeof(m_TextureFormatSupport) * 8 >= TEXTURE_FORMAT_COUNT, Invalid_Struct_Size );
     }
 
     static GLenum GetOpenGLPrimitiveType(PrimitiveType prim_type)
@@ -635,6 +635,7 @@ static void LogFrameBufferError(GLenum status)
         {
             case CONTEXT_FEATURE_MULTI_TARGET_RENDERING: return context->m_MultiTargetRenderingSupport;
             case CONTEXT_FEATURE_TEXTURE_ARRAY:          return context->m_TextureArraySupport;
+            case CONTEXT_FEATURE_COMPUTE_SHADER:         return false; // TODO!
         }
         return false;
     }
@@ -1177,6 +1178,22 @@ static void LogFrameBufferError(GLenum status)
             context->m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_RG16F;
             context->m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_R32F;
             context->m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_RG32F;
+        }
+        else
+        {
+            // https://registry.khronos.org/OpenGL/extensions/EXT/EXT_color_buffer_half_float.txt
+            if (OpenGLIsExtensionSupported(context, "EXT_color_buffer_half_float"))
+            {
+                context->m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_RGB16F;
+                context->m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_RGBA16F;
+            }
+
+            // https://registry.khronos.org/webgl/extensions/WEBGL_color_buffer_float/
+            if (OpenGLIsExtensionSupported(context, "WEBGL_color_buffer_float"))
+            {
+                context->m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_RGB32F;
+                context->m_TextureFormatSupport |= 1 << TEXTURE_FORMAT_RGBA32F;
+            }
         }
 
         // GL_NUM_COMPRESSED_TEXTURE_FORMATS is deprecated in newer OpenGL Versions
@@ -1793,8 +1810,11 @@ static void LogFrameBufferError(GLenum status)
 
         for (uint32_t i=0; i<vertex_declaration->m_StreamCount; i++)
         {
-            glDisableVertexAttribArray(i);
-            CHECK_GL_ERROR;
+            if (vertex_declaration->m_Streams[i].m_PhysicalIndex != -1)
+            {
+                glDisableVertexAttribArray(vertex_declaration->m_Streams[i].m_PhysicalIndex);
+                CHECK_GL_ERROR;
+            }
         }
 
         glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
@@ -1804,24 +1824,28 @@ static void LogFrameBufferError(GLenum status)
         CHECK_GL_ERROR;
     }
 
-    static void OpenGLHashVertexDeclaration(HashState32 *state, HVertexDeclaration vertex_declaration)
+    static void OpenGLHashVertexDeclaration(HashState32* state, HVertexDeclaration vertex_declaration)
     {
-        uint16_t stream_count = vertex_declaration->m_StreamCount;
-        for (int i = 0; i < stream_count; ++i)
-        {
-            VertexDeclaration::Stream& stream = vertex_declaration->m_Streams[i];
-            dmHashUpdateBuffer32(state, &stream.m_NameHash,     sizeof(dmhash_t));
-            dmHashUpdateBuffer32(state, &stream.m_LogicalIndex, sizeof(stream.m_LogicalIndex));
-            dmHashUpdateBuffer32(state, &stream.m_Size,         sizeof(stream.m_Size));
-            dmHashUpdateBuffer32(state, &stream.m_Offset,       sizeof(stream.m_Offset));
-            dmHashUpdateBuffer32(state, &stream.m_Type,         sizeof(stream.m_Type));
-            dmHashUpdateBuffer32(state, &stream.m_Normalize,    sizeof(stream.m_Normalize));
-        }
+        dmHashUpdateBuffer32(state, vertex_declaration->m_Streams, sizeof(VertexDeclaration::Stream) * vertex_declaration->m_StreamCount);
     }
 
     static uint32_t OpenGLGetVertexDeclarationStride(HVertexDeclaration vertex_declaration)
     {
         return vertex_declaration->m_Stride;
+    }
+
+    static uint32_t OpenGLGetVertexStreamOffset(HVertexDeclaration vertex_declaration, uint64_t name_hash)
+    {
+        uint32_t count = vertex_declaration->m_StreamCount;
+        VertexDeclaration::Stream* streams = vertex_declaration->m_Streams;
+        for (int i = 0; i < count; ++i)
+        {
+            if (streams[i].m_NameHash == name_hash)
+            {
+                return streams[i].m_Offset;
+            }
+        }
+        return dmGraphics::INVALID_STREAM_OFFSET;
     }
 
     static void OpenGLDrawElements(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count, Type type, HIndexBuffer index_buffer)
@@ -1887,6 +1911,7 @@ static void LogFrameBufferError(GLenum status)
         }
         OpenGLShader* shader = new OpenGLShader();
         shader->m_Id         = shader_id;
+        shader->m_Language   = ddf->m_Language;
         return shader;
     }
 
@@ -1936,6 +1961,23 @@ static void LogFrameBufferError(GLenum status)
     {
         ++context->m_ModificationVersion;
         context->m_ModificationVersion = dmMath::Max(0U, context->m_ModificationVersion);
+    }
+
+    static HComputeProgram OpenGLNewComputeProgram(HContext _context, ShaderDesc::Shader* ddf)
+    {
+        assert(0 && "Not implemented!");
+        return 0;
+    }
+
+    static HProgram OpenGLNewProgramFromCompute(HContext context, HComputeProgram compute_program)
+    {
+        assert(0 && "Not implemented!");
+        return 0;
+    }
+
+    static void OpenGLDeleteComputeProgram(HComputeProgram prog)
+    {
+        assert(0 && "Not implemented!");
     }
 
     static HProgram OpenGLNewProgram(HContext context, HVertexProgram vertex_program, HFragmentProgram fragment_program)
@@ -1995,7 +2037,8 @@ static void LogFrameBufferError(GLenum status)
             return 0;
         }
 
-        program->m_Id = p;
+        program->m_Id       = p;
+        program->m_Language = vertex_shader->m_Language;
 
         BuildAttributes(program);
         return (HProgram) program;
@@ -2103,6 +2146,11 @@ static void LogFrameBufferError(GLenum status)
     static void OpenGLDeleteFragmentProgram(HFragmentProgram program)
     {
         OpenGLDeleteShader(((OpenGLShader*) program));
+    }
+
+    static ShaderDesc::Language OpenGLGetProgramLanguage(HProgram program)
+    {
+        return ((OpenGLProgram*) program)->m_Language;
     }
 
     static ShaderDesc::Language OpenGLGetShaderProgramLanguage(HContext _context)
@@ -2244,7 +2292,7 @@ static void LogFrameBufferError(GLenum status)
         return (uint32_t)uniform_name_length;
     }
 
-    static int32_t OpenGLGetUniformLocation(HProgram prog, const char* name)
+    static HUniformLocation OpenGLGetUniformLocation(HProgram prog, const char* name)
     {
         OpenGLProgram* program_ptr = (OpenGLProgram*) prog;
         GLint location = glGetUniformLocation(program_ptr->m_Id, name);
@@ -2253,7 +2301,7 @@ static void LogFrameBufferError(GLenum status)
             // Clear error if uniform isn't found
             CLEAR_GL_ERROR
         }
-        return (uint32_t) location;
+        return (HUniformLocation) location;
     }
 
     static void OpenGLSetViewport(HContext context, int32_t x, int32_t y, int32_t width, int32_t height)
@@ -2264,22 +2312,22 @@ static void LogFrameBufferError(GLenum status)
         CHECK_GL_ERROR;
     }
 
-    static void OpenGLSetConstantV4(HContext context, const Vector4* data, int count, int base_register)
+    static void OpenGLSetConstantV4(HContext context, const Vector4* data, int count, HUniformLocation base_location)
     {
-        glUniform4fv(base_register, count, (const GLfloat*) data);
+        glUniform4fv(base_location, count, (const GLfloat*) data);
         CHECK_GL_ERROR;
     }
 
-    static void OpenGLSetConstantM4(HContext context, const Vector4* data, int count, int base_register)
+    static void OpenGLSetConstantM4(HContext context, const Vector4* data, int count, HUniformLocation base_location)
     {
-        glUniformMatrix4fv(base_register, count, 0, (const GLfloat*) data);
+        glUniformMatrix4fv(base_location, count, 0, (const GLfloat*) data);
         CHECK_GL_ERROR;
     }
 
-    static void OpenGLSetSampler(HContext context, int32_t base_register, int32_t unit)
+    static void OpenGLSetSampler(HContext context, HUniformLocation location, int32_t unit)
     {
         assert(context);
-        glUniform1i(base_register, unit);
+        glUniform1i(location, unit);
         CHECK_GL_ERROR;
     }
 
@@ -3139,7 +3187,8 @@ static void LogFrameBufferError(GLenum status)
             gl_format          = DMGRAPHICS_TEXTURE_FORMAT_RGB;
             gl_internal_format = DMGRAPHICS_TEXTURE_FORMAT_RGB16F;
             EMSCRIPTEN_ES2_BACKWARDS_COMPAT(gl_internal_format, DMGRAPHICS_TEXTURE_FORMAT_RGB);
-            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, GL_HALF_FLOAT_OES);
+            EMSCRIPTEN_ES2_BACKWARDS_COMPAT(gl_type, DMGRAPHICS_TYPE_HALF_FLOAT_OES);
+            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, DMGRAPHICS_TYPE_HALF_FLOAT_OES);
             break;
         case TEXTURE_FORMAT_RGB32F:
             gl_type            = GL_FLOAT;
@@ -3151,7 +3200,9 @@ static void LogFrameBufferError(GLenum status)
             gl_type            = DMGRAPHICS_TYPE_HALF_FLOAT;
             gl_format          = DMGRAPHICS_TEXTURE_FORMAT_RGBA;
             gl_internal_format = DMGRAPHICS_TEXTURE_FORMAT_RGBA16F;
-            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, GL_HALF_FLOAT_OES);
+            EMSCRIPTEN_ES2_BACKWARDS_COMPAT(gl_internal_format, DMGRAPHICS_TEXTURE_FORMAT_RGBA);
+            EMSCRIPTEN_ES2_BACKWARDS_COMPAT(gl_type, DMGRAPHICS_TYPE_HALF_FLOAT_OES);
+            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, DMGRAPHICS_TYPE_HALF_FLOAT_OES);
             break;
         case TEXTURE_FORMAT_RGBA32F:
             gl_type            = GL_FLOAT;
@@ -3163,7 +3214,7 @@ static void LogFrameBufferError(GLenum status)
             gl_type            = DMGRAPHICS_TYPE_HALF_FLOAT;
             gl_format          = DMGRAPHICS_TEXTURE_FORMAT_RED;
             gl_internal_format = DMGRAPHICS_TEXTURE_FORMAT_R16F;
-            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, GL_HALF_FLOAT_OES);
+            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, DMGRAPHICS_TYPE_HALF_FLOAT_OES);
             break;
         case TEXTURE_FORMAT_R32F:
             gl_type            = GL_FLOAT;
@@ -3174,7 +3225,7 @@ static void LogFrameBufferError(GLenum status)
             gl_type            = DMGRAPHICS_TYPE_HALF_FLOAT;
             gl_format          = DMGRAPHICS_TEXTURE_FORMAT_RG;
             gl_internal_format = DMGRAPHICS_TEXTURE_FORMAT_RG16F;
-            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, GL_HALF_FLOAT_OES);
+            ANDROID_ES2_BACKWARDS_COMPAT(gl_type, DMGRAPHICS_TYPE_HALF_FLOAT_OES);
             break;
         case TEXTURE_FORMAT_RG32F:
             gl_type            = GL_FLOAT;

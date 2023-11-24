@@ -39,19 +39,22 @@ namespace dmGameSystem
         dmGameObject::HInstance m_Instance;
         MaterialResource*       m_Material;
         uint16_t                m_ComponentIndex;
-        uint8_t                 m_Enabled : 1;
+        uint8_t                 m_Enabled       : 1;
         uint8_t                 m_AddedToUpdate : 1;
+        uint8_t                 m_Initialized   : 1;
+        uint8_t                 m_Padding       : 5;
         dmArray<void*>          m_ResourcePropertyPointers;
     };
 
     struct BoxVertex
     {
         inline BoxVertex() {}
-        inline BoxVertex(const dmVMath::Vector4& p, float u, float v, const dmVMath::Vector4& color)
+        inline BoxVertex(const dmVMath::Vector4& p, float u, float v, const dmVMath::Vector4& color, uint32_t page_index)
         {
             SetPosition(p);
             SetUV(u, v);
             SetColor(color);
+            SetPageIndex(page_index);
         }
 
         inline void SetPosition(const dmVMath::Vector4& p)
@@ -75,9 +78,15 @@ namespace dmGameSystem
             m_Color[3] = c.getW();
         }
 
+        inline void SetPageIndex(uint32_t page_index)
+        {
+            m_PageIndex = (float) page_index;
+        }
+
         float m_Position[3];
         float m_UV[2];
         float m_Color[4];
+        float m_PageIndex;
     };
 
     struct GuiRenderObject
@@ -126,6 +135,9 @@ namespace dmGameSystem
         dmArray<GuiComponent*>                   m_Components;
         dmGraphics::HVertexDeclaration           m_VertexDeclaration;
         dmGraphics::HVertexBuffer                m_VertexBuffer;
+        dmBuffer::StreamDeclaration*             m_BoxVertexStreamDeclaration;
+        uint32_t                                 m_BoxVertexStreamDeclarationCount;
+        uint32_t                                 m_BoxVertexStructSize;
         dmArray<BoxVertex>                       m_ClientVertexBuffer;
         dmGraphics::HTexture                     m_WhiteTexture;
         dmParticle::HParticleContext             m_ParticleContext;

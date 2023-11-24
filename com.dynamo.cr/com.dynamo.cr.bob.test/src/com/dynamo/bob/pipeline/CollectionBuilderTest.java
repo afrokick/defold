@@ -43,7 +43,7 @@ import com.dynamo.proto.DdfMath.Point3;
 import com.dynamo.proto.DdfMath.Quat;
 import com.dynamo.gamesys.proto.Sprite.SpriteDesc;
 import com.google.protobuf.Message;
-import com.dynamo.bob.pipeline.ResourceNode;
+import com.dynamo.bob.pipeline.graph.ResourceNode;
 
 public class CollectionBuilderTest extends AbstractProtoBuilderTest {
 
@@ -637,8 +637,8 @@ public class CollectionBuilderTest extends AbstractProtoBuilderTest {
      * Structure:
      * - go
      *   - factory
-     *      - collection
-     *          - sprite
+     *     - go
+     *       - sprite
      * @throws Exception
      */
     @Test

@@ -571,7 +571,7 @@ namespace dmGraphics
                 DisableVertexStream(context, i);
     }
 
-    void NullHashVertexDeclaration(HashState32 *state, HVertexDeclaration vertex_declaration)
+    static void NullHashVertexDeclaration(HashState32 *state, HVertexDeclaration vertex_declaration)
     {
         for (int i = 0; i < vertex_declaration->m_StreamDeclaration.m_StreamCount; ++i)
         {
@@ -651,19 +651,13 @@ namespace dmGraphics
         return g_DrawCount;
     }
 
-    struct VertexProgram
+    struct ShaderProgram
     {
         char*                m_Data;
         ShaderDesc::Language m_Language;
     };
 
-    struct FragmentProgram
-    {
-        char*                m_Data;
-        ShaderDesc::Language m_Language;
-    };
-
-    static void NullShaderResourceCallback(dmGraphics::GLSLUniformParserBindingType binding_type, const char* name, uint32_t name_length, dmGraphics::Type type, uint32_t size, uintptr_t userdata);
+    static void ProgramShaderResourceCallback(dmGraphics::GLSLUniformParserBindingType binding_type, const char* name, uint32_t name_length, dmGraphics::Type type, uint32_t size, uintptr_t userdata);
 
     struct ShaderBinding
     {
@@ -677,19 +671,36 @@ namespace dmGraphics
 
     struct Program
     {
-        Program(VertexProgram* vp, FragmentProgram* fp)
+        Program(ShaderProgram* vp, ShaderProgram* fp)
         {
             m_Uniforms.SetCapacity(16);
-            m_VP = vp;
-            m_FP = fp;
+            m_Compute = 0;
+            m_VP      = vp;
+            m_FP      = fp;
             if (m_VP != 0x0)
             {
-                GLSLAttributeParse(m_VP->m_Language, m_VP->m_Data, NullShaderResourceCallback, (uintptr_t)this);
-                GLSLUniformParse(m_VP->m_Language, m_VP->m_Data, NullShaderResourceCallback, (uintptr_t)this);
+                GLSLAttributeParse(m_VP->m_Language, m_VP->m_Data, ProgramShaderResourceCallback, (uintptr_t)this);
+                GLSLUniformParse(m_VP->m_Language, m_VP->m_Data, ProgramShaderResourceCallback, (uintptr_t)this);
+                m_Language = m_VP->m_Language;
             }
             if (m_FP != 0x0)
             {
-                GLSLUniformParse(m_FP->m_Language, m_FP->m_Data, NullShaderResourceCallback, (uintptr_t)this);
+                GLSLUniformParse(m_FP->m_Language, m_FP->m_Data, ProgramShaderResourceCallback, (uintptr_t)this);
+                m_Language = m_FP->m_Language;
+            }
+        }
+
+        Program(ShaderProgram* compute)
+        {
+            m_Uniforms.SetCapacity(16);
+            m_VP      = 0;
+            m_FP      = 0;
+            m_Compute = compute;
+
+            if (m_Compute != 0x0)
+            {
+                GLSLUniformParse(m_Compute->m_Language, m_Compute->m_Data, ProgramShaderResourceCallback, (uintptr_t) this);
+                m_Language = compute->m_Language;
             }
         }
 
@@ -699,13 +710,17 @@ namespace dmGraphics
                 delete[] m_Uniforms[i].m_Name;
         }
 
-        VertexProgram*         m_VP;
-        FragmentProgram*       m_FP;
+        ShaderDesc::Language   m_Language;
+
+        ShaderProgram*         m_VP;
+        ShaderProgram*         m_FP;
+        ShaderProgram*         m_Compute;
+
         dmArray<ShaderBinding> m_Uniforms;
         dmArray<ShaderBinding> m_Attributes;
     };
 
-    static void NullShaderResourceCallback(dmGraphics::GLSLUniformParserBindingType binding_type, const char* name, uint32_t name_length, dmGraphics::Type type, uint32_t size, uintptr_t userdata)
+    static void ProgramShaderResourceCallback(dmGraphics::GLSLUniformParserBindingType binding_type, const char* name, uint32_t name_length, dmGraphics::Type type, uint32_t size, uintptr_t userdata)
     {
         Program* program = (Program*) userdata;
 
@@ -729,17 +744,43 @@ namespace dmGraphics
         binding_array->Push(binding);
     }
 
+    static ShaderProgram* NewShaderProgramFromDDF(ShaderDesc::Shader* ddf)
+    {
+        assert(ddf);
+        ShaderProgram* p = new ShaderProgram();
+        p->m_Data = new char[ddf->m_Source.m_Count+1];
+        memcpy(p->m_Data, ddf->m_Source.m_Data, ddf->m_Source.m_Count);
+        p->m_Data[ddf->m_Source.m_Count] = '\0';
+        p->m_Language = ddf->m_Language;
+        return p;
+    }
+
+    static HComputeProgram NullNewComputeProgram(HContext context, ShaderDesc::Shader* ddf)
+    {
+        return (HComputeProgram) NewShaderProgramFromDDF(ddf);
+    }
+
+    static HProgram NullNewProgramFromCompute(HContext context, HComputeProgram compute_program)
+    {
+        return (HProgram) new Program((ShaderProgram*) compute_program);
+    }
+
+    static void NullDeleteComputeProgram(HComputeProgram prog)
+    {
+        delete (ShaderProgram*) prog;
+    }
+
     static HProgram NullNewProgram(HContext context, HVertexProgram vertex_program, HFragmentProgram fragment_program)
     {
-        VertexProgram* vertex     = 0x0;
-        FragmentProgram* fragment = 0x0;
+        ShaderProgram* vertex   = 0x0;
+        ShaderProgram* fragment = 0x0;
         if (vertex_program != INVALID_VERTEX_PROGRAM_HANDLE)
         {
-            vertex = (VertexProgram*) vertex_program;
+            vertex = (ShaderProgram*) vertex_program;
         }
         if (fragment_program != INVALID_FRAGMENT_PROGRAM_HANDLE)
         {
-            fragment = (FragmentProgram*) fragment_program;
+            fragment = (ShaderProgram*) fragment_program;
         }
         return (HProgram) new Program(vertex, fragment);
     }
@@ -751,31 +792,19 @@ namespace dmGraphics
 
     static HVertexProgram NullNewVertexProgram(HContext context, ShaderDesc::Shader* ddf)
     {
-        assert(ddf);
-        VertexProgram* p = new VertexProgram();
-        p->m_Data = new char[ddf->m_Source.m_Count+1];
-        memcpy(p->m_Data, ddf->m_Source.m_Data, ddf->m_Source.m_Count);
-        p->m_Data[ddf->m_Source.m_Count] = '\0';
-        p->m_Language = ddf->m_Language;
-        return (uintptr_t)p;
+        return (HVertexProgram) NewShaderProgramFromDDF(ddf);
     }
 
     static HFragmentProgram NullNewFragmentProgram(HContext context, ShaderDesc::Shader* ddf)
     {
-        assert(ddf);
-        FragmentProgram* p = new FragmentProgram();
-        p->m_Data = new char[ddf->m_Source.m_Count+1];
-        memcpy(p->m_Data, ddf->m_Source.m_Data, ddf->m_Source.m_Count);
-        p->m_Data[ddf->m_Source.m_Count] = '\0';
-        p->m_Language = ddf->m_Language;
-        return (uintptr_t)p;
+        return (HFragmentProgram) NewShaderProgramFromDDF(ddf);
     }
 
     static bool NullReloadVertexProgram(HVertexProgram prog, ShaderDesc::Shader* ddf)
     {
         assert(prog);
         assert(ddf);
-        VertexProgram* p = (VertexProgram*)prog;
+        ShaderProgram* p = (ShaderProgram*)prog;
         delete [] (char*)p->m_Data;
         p->m_Data = new char[ddf->m_Source.m_Count];
         memcpy((char*)p->m_Data, ddf->m_Source.m_Data, ddf->m_Source.m_Count);
@@ -786,7 +815,7 @@ namespace dmGraphics
     {
         assert(prog);
         assert(ddf);
-        FragmentProgram* p = (FragmentProgram*)prog;
+        ShaderProgram* p = (ShaderProgram*)prog;
         delete [] (char*)p->m_Data;
         p->m_Data = new char[ddf->m_Source.m_Count];
         memcpy((char*)p->m_Data, ddf->m_Source.m_Data, ddf->m_Source.m_Count);
@@ -796,7 +825,7 @@ namespace dmGraphics
     static void NullDeleteVertexProgram(HVertexProgram program)
     {
         assert(program);
-        VertexProgram* p = (VertexProgram*)program;
+        ShaderProgram* p = (ShaderProgram*)program;
         delete [] (char*)p->m_Data;
         delete p;
     }
@@ -804,9 +833,14 @@ namespace dmGraphics
     static void NullDeleteFragmentProgram(HFragmentProgram program)
     {
         assert(program);
-        FragmentProgram* p = (FragmentProgram*)program;
+        ShaderProgram* p = (ShaderProgram*)program;
         delete [] (char*)p->m_Data;
         delete p;
+    }
+
+    static ShaderDesc::Language NullGetProgramLanguage(HProgram program)
+    {
+        return ((ShaderProgram*) program)->m_Language;
     }
 
     static ShaderDesc::Language NullGetShaderProgramLanguage(HContext context)
@@ -904,6 +938,22 @@ namespace dmGraphics
         return stride;
     }
 
+    static uint32_t NullGetVertexStreamOffset(HVertexDeclaration vertex_declaration, dmhash_t name_hash)
+    {
+        uint32_t count = vertex_declaration->m_StreamDeclaration.m_StreamCount;
+        VertexStream* streams = vertex_declaration->m_StreamDeclaration.m_Streams;
+        uint32_t offset = 0;
+        for (int i = 0; i < count; ++i)
+        {
+            if (streams[i].m_NameHash == name_hash)
+            {
+                return offset;
+            }
+            offset += GetTypeSize(streams[i].m_Type) * streams[i].m_Size;
+        }
+        return dmGraphics::INVALID_STREAM_OFFSET;
+    }
+
     static uint32_t NullGetUniformName(HProgram prog, uint32_t index, char* buffer, uint32_t buffer_size, Type* type, int32_t* size)
     {
         Program* program = (Program*)prog;
@@ -916,7 +966,7 @@ namespace dmGraphics
         return (uint32_t)strlen(buffer);
     }
 
-    static int32_t NullGetUniformLocation(HProgram prog, const char* name)
+    static HUniformLocation NullGetUniformLocation(HProgram prog, const char* name)
     {
         Program* program = (Program*)prog;
         uint32_t count = program->m_Uniforms.Size();
@@ -928,7 +978,7 @@ namespace dmGraphics
                 return (int32_t)uniform.m_Index;
             }
         }
-        return -1;
+        return INVALID_UNIFORM_LOCATION;
     }
 
     static void NullSetViewport(HContext context, int32_t x, int32_t y, int32_t width, int32_t height)
@@ -937,31 +987,31 @@ namespace dmGraphics
     }
 
     // Tests Only
-    const Vector4& GetConstantV4Ptr(HContext _context, int base_register)
+    const Vector4& GetConstantV4Ptr(HContext _context, HUniformLocation base_location)
     {
         assert(_context);
         NullContext* context = (NullContext*) _context;
         assert(context->m_Program != 0x0);
-        return context->m_ProgramRegisters[base_register];
+        return context->m_ProgramRegisters[base_location];
     }
 
-    static void NullSetConstantV4(HContext _context, const Vector4* data, int count, int base_register)
+    static void NullSetConstantV4(HContext _context, const Vector4* data, int count, HUniformLocation base_location)
     {
         assert(_context);
         NullContext* context = (NullContext*) _context;
         assert(context->m_Program != 0x0);
-        memcpy(&context->m_ProgramRegisters[base_register], data, sizeof(Vector4) * count);
+        memcpy(&context->m_ProgramRegisters[base_location], data, sizeof(Vector4) * count);
     }
 
-    static void NullSetConstantM4(HContext _context, const Vector4* data, int count, int base_register)
+    static void NullSetConstantM4(HContext _context, const Vector4* data, int count, HUniformLocation base_location)
     {
         assert(_context);
         NullContext* context = (NullContext*) _context;
         assert(context->m_Program != 0x0);
-        memcpy(&context->m_ProgramRegisters[base_register], data, sizeof(Vector4) * 4 * count);
+        memcpy(&context->m_ProgramRegisters[base_location], data, sizeof(Vector4) * 4 * count);
     }
 
-    static void NullSetSampler(HContext context, int32_t location, int32_t unit)
+    static void NullSetSampler(HContext context, HUniformLocation location, int32_t unit)
     {
     }
 
@@ -1606,18 +1656,7 @@ namespace dmGraphics
         return false;
     }
 
-    ////////////////////////////////
-    // UNIT TEST FUNCTIONS
-    ////////////////////////////////
-    void* MapIndexBuffer(HIndexBuffer buffer, BufferAccess access)
-    {
-        IndexBuffer* ib = (IndexBuffer*)buffer;
-        ib->m_Copy = new char[ib->m_Size];
-        memcpy(ib->m_Copy, ib->m_Buffer, ib->m_Size);
-        return ib->m_Copy;
-    }
-
-    bool UnmapIndexBuffer(HIndexBuffer buffer)
+    bool UnmapIndexBuffer(HContext context, HIndexBuffer buffer)
     {
         IndexBuffer* ib = (IndexBuffer*)buffer;
         memcpy(ib->m_Buffer, ib->m_Copy, ib->m_Size);
@@ -1626,7 +1665,7 @@ namespace dmGraphics
         return true;
     }
 
-    void* MapVertexBuffer(HVertexBuffer buffer, BufferAccess access)
+    void* MapVertexBuffer(HContext context, HVertexBuffer buffer, BufferAccess access)
     {
         VertexBuffer* vb = (VertexBuffer*)buffer;
         vb->m_Copy = new char[vb->m_Size];
@@ -1634,13 +1673,21 @@ namespace dmGraphics
         return vb->m_Copy;
     }
 
-    bool UnmapVertexBuffer(HVertexBuffer buffer)
+    bool UnmapVertexBuffer(HContext context, HVertexBuffer buffer)
     {
         VertexBuffer* vb = (VertexBuffer*)buffer;
         memcpy(vb->m_Buffer, vb->m_Copy, vb->m_Size);
         delete [] vb->m_Copy;
         vb->m_Copy = 0x0;
         return true;
+    }
+
+    void* MapIndexBuffer(HContext context, HIndexBuffer buffer, BufferAccess access)
+    {
+        IndexBuffer* ib = (IndexBuffer*)buffer;
+        ib->m_Copy = new char[ib->m_Size];
+        memcpy(ib->m_Copy, ib->m_Buffer, ib->m_Size);
+        return ib->m_Copy;
     }
 
     static GraphicsAdapterFunctionTable NullRegisterFunctionTable()

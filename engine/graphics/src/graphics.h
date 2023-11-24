@@ -67,6 +67,8 @@ namespace dmGraphics
     //       to the users via lua: http://lua-users.org/wiki/NumbersTutorial
     typedef uint64_t HAssetHandle;
 
+    typedef uintptr_t HComputeProgram;
+
     const static uint64_t MAX_ASSET_HANDLE_VALUE       = 0x20000000000000-1; // 2^53 - 1
     static const uint8_t  MAX_BUFFER_COLOR_ATTACHMENTS = 4;
     static const uint8_t  MAX_BUFFER_TYPE_COUNT        = 2 + MAX_BUFFER_COLOR_ATTACHMENTS;
@@ -79,6 +81,7 @@ namespace dmGraphics
 
     static const HVertexProgram   INVALID_VERTEX_PROGRAM_HANDLE   = ~0u;
     static const HFragmentProgram INVALID_FRAGMENT_PROGRAM_HANDLE = ~0u;
+    static const HUniformLocation INVALID_UNIFORM_LOCATION        = ~0ull;
 
     enum AssetType
     {
@@ -117,6 +120,7 @@ namespace dmGraphics
         TEXTURE_TYPE_2D       = 0,
         TEXTURE_TYPE_2D_ARRAY = 1,
         TEXTURE_TYPE_CUBE_MAP = 2,
+        TEXTURE_TYPE_IMAGE_2D = 3,
     };
 
     // Texture filter
@@ -189,6 +193,7 @@ namespace dmGraphics
     {
         CONTEXT_FEATURE_MULTI_TARGET_RENDERING = 0,
         CONTEXT_FEATURE_TEXTURE_ARRAY          = 1,
+        CONTEXT_FEATURE_COMPUTE_SHADER         = 2,
     };
 
     // Translation table to translate RenderTargetAttachment to BufferType
@@ -198,16 +203,35 @@ namespace dmGraphics
         AttachmentToBufferType();
     };
 
-    struct TextureCreationParams {
+    enum AttachmentOp
+    {
+        ATTACHMENT_OP_DONT_CARE,
+        ATTACHMENT_OP_LOAD,
+        ATTACHMENT_OP_STORE,
+        ATTACHMENT_OP_CLEAR,
+    };
 
-        TextureCreationParams() :
-            m_Type(TEXTURE_TYPE_2D),
-            m_Width(0),
-            m_Height(0),
-            m_Depth(1),
-            m_OriginalWidth(0),
-            m_OriginalHeight(0),
-            m_MipMapCount(1)
+    enum TextureUsageHint
+    {
+        TEXTURE_USAGE_HINT_NONE       = 0,
+        TEXTURE_USAGE_HINT_SAMPLE     = 1,
+        TEXTURE_USAGE_HINT_MEMORYLESS = 2,
+        TEXTURE_USAGE_HINT_INPUT      = 4,
+        TEXTURE_USAGE_HINT_COLOR      = 8,
+        TEXTURE_USAGE_HINT_STORAGE    = 16,
+    };
+
+    struct TextureCreationParams
+    {
+        TextureCreationParams()
+        : m_Type(TEXTURE_TYPE_2D)
+        , m_Width(0)
+        , m_Height(0)
+        , m_Depth(1)
+        , m_OriginalWidth(0)
+        , m_OriginalHeight(0)
+        , m_MipMapCount(1)
+        , m_UsageHintBits(TEXTURE_USAGE_HINT_SAMPLE)
         {}
 
         TextureType m_Type;
@@ -217,6 +241,7 @@ namespace dmGraphics
         uint16_t    m_OriginalWidth;
         uint16_t    m_OriginalHeight;
         uint8_t     m_MipMapCount;
+        uint8_t     m_UsageHintBits;
     };
 
     struct TextureParams
@@ -267,6 +292,15 @@ namespace dmGraphics
         TextureParams         m_ColorBufferParams[MAX_BUFFER_COLOR_ATTACHMENTS];
         TextureParams         m_DepthBufferParams;
         TextureParams         m_StencilBufferParams;
+
+    #ifdef DM_EXPERIMENTAL_GRAPHICS_FEATURES
+        AttachmentOp          m_ColorBufferLoadOps[MAX_BUFFER_COLOR_ATTACHMENTS];
+        AttachmentOp          m_ColorBufferStoreOps[MAX_BUFFER_COLOR_ATTACHMENTS];
+        float                 m_ColorBufferClearValue[MAX_BUFFER_COLOR_ATTACHMENTS][4];
+
+        // TODO: Depth/Stencil
+    #endif
+
         uint8_t               m_DepthTexture   : 1;
         uint8_t               m_StencilTexture : 1;
     };
@@ -547,21 +581,27 @@ namespace dmGraphics
     void DrawElements(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count, Type type, HIndexBuffer index_buffer);
     void Draw(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count);
 
-    HVertexProgram   NewVertexProgram(HContext context, ShaderDesc::Shader* ddf);
-    HFragmentProgram NewFragmentProgram(HContext context, ShaderDesc::Shader* ddf);
-    HProgram         NewProgram(HContext context, HVertexProgram vertex_program, HFragmentProgram fragment_program);
-    void             DeleteProgram(HContext context, HProgram program);
+    // Shaders
+    HVertexProgram       NewVertexProgram(HContext context, ShaderDesc::Shader* ddf);
+    HFragmentProgram     NewFragmentProgram(HContext context, ShaderDesc::Shader* ddf);
+    HComputeProgram      NewComputeProgram(HContext context, ShaderDesc::Shader* ddf);
 
-    bool ReloadVertexProgram(HVertexProgram prog, ShaderDesc::Shader* ddf);
-    bool ReloadFragmentProgram(HFragmentProgram prog, ShaderDesc::Shader* ddf);
-    void DeleteVertexProgram(HVertexProgram prog);
-    void DeleteFragmentProgram(HFragmentProgram prog);
-    ShaderDesc::Language GetShaderProgramLanguage(HContext context);
-    ShaderDesc::Shader* GetShaderProgram(HContext context, ShaderDesc* shader_desc);
+    HProgram             NewProgram(HContext context, HComputeProgram compute_program);
+    HProgram             NewProgram(HContext context, HVertexProgram vertex_program, HFragmentProgram fragment_program);
+    void                 DeleteProgram(HContext context, HProgram program);
 
-    void EnableProgram(HContext context, HProgram program);
-    void DisableProgram(HContext context);
-    bool ReloadProgram(HContext context, HProgram program, HVertexProgram vert_program, HFragmentProgram frag_program);
+    bool                 ReloadVertexProgram(HVertexProgram prog, ShaderDesc::Shader* ddf);
+    bool                 ReloadFragmentProgram(HFragmentProgram prog, ShaderDesc::Shader* ddf);
+    void                 DeleteVertexProgram(HVertexProgram prog);
+    void                 DeleteFragmentProgram(HFragmentProgram prog);
+    void                 DeleteComputeProgram(HComputeProgram prog);
+
+    ShaderDesc::Language GetProgramLanguage(HProgram program);
+    ShaderDesc::Shader*  GetShaderProgram(HContext context, ShaderDesc* shader_desc);
+
+    void                 EnableProgram(HContext context, HProgram program);
+    void                 DisableProgram(HContext context);
+    bool                 ReloadProgram(HContext context, HProgram program, HVertexProgram vert_program, HFragmentProgram frag_program);
 
     // Attributes
     uint32_t         GetAttributeCount(HProgram prog);
@@ -569,13 +609,13 @@ namespace dmGraphics
     void             GetAttributeValues(const dmGraphics::VertexAttribute& attribute, const uint8_t** data_ptr, uint32_t* data_size);
     dmGraphics::Type GetGraphicsType(dmGraphics::VertexAttribute::DataType data_type);
 
-    uint32_t GetUniformName(HProgram prog, uint32_t index, char* buffer, uint32_t buffer_size, Type* type, int32_t* size);
-    uint32_t GetUniformCount(HProgram prog);
-    int32_t  GetUniformLocation(HProgram prog, const char* name);
+    uint32_t         GetUniformName(HProgram prog, uint32_t index, char* buffer, uint32_t buffer_size, Type* type, int32_t* size);
+    uint32_t         GetUniformCount(HProgram prog);
+    HUniformLocation GetUniformLocation(HProgram prog, const char* name);
 
-    void SetConstantV4(HContext context, const dmVMath::Vector4* data, int count, int base_register);
-    void SetConstantM4(HContext context, const dmVMath::Vector4* data, int count, int base_register);
-    void SetSampler(HContext context, int32_t location, int32_t unit);
+    void SetConstantV4(HContext context, const dmVMath::Vector4* data, int count, HUniformLocation base_location);
+    void SetConstantM4(HContext context, const dmVMath::Vector4* data, int count, HUniformLocation base_location);
+    void SetSampler(HContext context, HUniformLocation location, int32_t unit);
     void SetViewport(HContext context, int32_t x, int32_t y, int32_t width, int32_t height);
 
     void EnableState(HContext context, State state);
@@ -649,7 +689,6 @@ namespace dmGraphics
     // Calculating mipmap info helpers
     uint16_t    GetMipmapSize(uint16_t size_0, uint8_t mipmap);
     uint8_t     GetMipmapCount(uint16_t size);
-
 
     // Asset handle helpers
     const char* GetAssetTypeLiteral(AssetType type);
